@@ -2,6 +2,36 @@
 
 [Bahasa Indonesia](#bahasa-indonesia) | [English](#english)
 
+## Instalasi Cepat (git clone)
+
+Salin dan jalankan di VPS sebagai root. Ganti `dns.domainmu.com` dengan domain
+SlowDNS Anda:
+
+```sh
+apt-get update && apt-get install -y git
+rm -rf /root/slowdns
+git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
+cd /root/slowdns
+SLOWDNS_DOMAIN=dns.domainmu.com bash install.sh auto
+```
+
+Mode `auto` memasang SlowDNS di UDP `53000` memakai key default, lalu
+menambahkan redirect UDP `53` -> `53000`. Service tidak memakai port `53`
+sehingga aman walau DNS bawaan VPS sudah menempati port itu.
+
+Periksa layanan dan rule redirect:
+
+```sh
+systemctl status slowdns
+iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
+```
+
+Hapus total (service, rule, dan folder `/root/slowdns`):
+
+```sh
+bash /root/slowdns/install.sh uninstall
+```
+
 ## Bahasa Indonesia
 
 ### 1. Siapkan VPS dan Berkas
