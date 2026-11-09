@@ -445,9 +445,9 @@ verify_listener() {
 	local attempt pid sockets binding ready bindings=()
 	read -r -a bindings <<< "$LISTENER_BINDINGS"
 	for attempt in 1 2 3 4 5; do
-		systemctl is-active --quiet "$SERVICE" || fail "The service is not active; check journalctl -u $SERVICE"
+		systemctl is-active --quiet "$SERVICE" || { printf 'The service is not active; check journalctl -u %s\n' "$SERVICE" >&2; return 1; }
 		pid="$(systemctl show "$SERVICE" --property=MainPID --value)"
-		sockets="$(listeners)" || fail "Could not check the listener"
+		sockets="$(listeners)" || { printf 'Could not check the listener\n' >&2; return 1; }
 		if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
 			sockets="$(printf '%s\n' "$sockets" | grep -E "pid=$pid([,)])" || true)"
 			ready=true
@@ -458,7 +458,8 @@ verify_listener() {
 		fi
 		sleep 1
 	done
-	fail "The service has no UDP listener verified for every selected IP family at $UDP_ADDR"
+	printf 'The service has no UDP listener verified for every selected IP family at %s\n' "$UDP_ADDR" >&2
+	return 1
 }
 
 family_listener() {
@@ -490,14 +491,46 @@ install_service() {
 	prepare_listener
 	check_runtime
 	check_port
-	TEMP_DIR="$(mktemp -d "$WORK_DIR/.slowdns-install.XXXXXX")"
-	trap 'rm -rf -- "$TEMP_DIR"' EXIT
-	trap 'exit 1' HUP INT TERM
-	chmod 0755 "$WORK_DIR/$BINARY"
-	write_files
-	systemctl enable "$SERVICE"
-	systemctl restart "$SERVICE"
-	verify_listener
+
+	sysctl -w net.ipv6.bindv6only=0 >/dev/null 2>&1 || true
+
+	local port="${UDP_ADDR##*:}"
+	local -a candidates=()
+	candidates+=(":$port")
+	if ip -4 address show scope global 2>/dev/null | grep -q inet; then
+		local v4
+		v4="$(ip -4 address show scope global 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')"
+		[ -n "$v4" ] && candidates+=("$v4:$port")
+	fi
+	if ip -6 address show scope global 2>/dev/null | grep -q inet6; then
+		local v6
+		v6="$(ip -6 address show scope global 2>/dev/null | awk '/inet6 /{split($2,a,"/"); print a[1]; exit}')"
+		[ -n "$v6" ] && candidates+=("[$v6]:$port")
+	fi
+
+	local bind attempt_ok=0
+	for bind in "${candidates[@]}"; do
+		UDP_ADDR="$bind"
+		rm -f "$ENV_FILE" "$SYSTEMD_DIR/$SERVICE"
+		TEMP_DIR="$(mktemp -d "$WORK_DIR/.slowdns-install.XXXXXX")"
+		trap 'rm -rf -- "$TEMP_DIR"' EXIT
+		trap 'exit 1' HUP INT TERM
+		chmod 0755 "$WORK_DIR/$BINARY"
+		prepare_listener
+		write_files
+		rm -rf "$TEMP_DIR"; TEMP_DIR=""
+		systemctl daemon-reload
+		systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+		systemctl restart "$SERVICE"
+		if verify_listener; then
+			attempt_ok=1
+			break
+		fi
+		systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+	done
+
+	[ "$attempt_ok" = 1 ] || fail "The service has no UDP listener verified for any bind address at port $port"
+
 	printf 'SlowDNS is running: %s\nConfiguration: %s\nPublic key: %s/server.pub\n' "$UDP_ADDR" "$ENV_FILE" "$WORK_DIR"
 	if [ -n "$REDIRECT_FROM" ] && [ "${UDP_ADDR##*:}" != "$REDIRECT_FROM" ]; then
 		printf 'Redirect active: UDP %s -> %s (comment slowdns-redirect)\n' "$REDIRECT_FROM" "${UDP_ADDR##*:}"
