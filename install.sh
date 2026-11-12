@@ -278,7 +278,7 @@ check_runtime() {
 
 listeners() {
 	local sockets
-	sockets="$(ss -H -O -lunpe "sport = :${UDP_ADDR##*:}")" || return 1
+	sockets="$(ss -H -lunpe "sport = :${UDP_ADDR##*:}")" || return 1
 	printf '%s\n' "$sockets" | awk -v host="${UDP_ADDR%:*}" '
 		$1=="UNCONN" {address=$4; sub(/:[^:]*$/, "", address)
 		if(host=="" || host=="0.0.0.0" || host=="[::]" || address==host ||
