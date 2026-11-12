@@ -44,8 +44,10 @@ The first install asks for the listener IP, UDP port (53), domain, and upstream.
 Use auto (default) for available IPv4 and IPv6, or enter one VPS IP address.
 Direct UDP 53 uses scoped iptables/ip6tables NOTRACK rules for those addresses.
 The rules are removed when the service stops. Other services are not stopped.
-Other ports do not use NOTRACK. No NAT or firewall allow rules are added.
-Allow the chosen UDP port in your firewall and set up the DNS delegation.
+When the chosen UDP port is not 53, a PREROUTING redirect sends incoming UDP 53
+to that port (comment slowdns-redirect); it is removed when the service stops.
+Other ports do not use NOTRACK. No firewall allow rules are added.
+Allow the chosen UDP ports in your firewall and set up the DNS delegation.
 Keep this installer in place while the service is installed.
 EOF
 }
@@ -108,11 +110,13 @@ read_config() {
 			SLOWDNS_DOMAIN) DOMAIN="$value" ;; SLOWDNS_UPSTREAM_ADDR) UPSTREAM="$value" ;;
 			SLOWDNS_PRIVKEY_FILE) KEY_FILE="$value" ;; SLOWDNS_EXTRA_ARGS) EXTRA_ARGS="$value" ;;
 			SLOWDNS_DIRECT_IPV4) DIRECT_IP="$value" ;; SLOWDNS_DIRECT_INTERFACE) INTERFACE="$value" ;;
-			SLOWDNS_DIRECT_BINDINGS) DIRECT_BINDINGS="" ;;
-
-		SLOWDNS_REDIRECT_FROM) REDIRECT_FROM="$value" ;;
+			SLOWDNS_DIRECT_BINDINGS) DIRECT_BINDINGS="$value" ;;
+			SLOWDNS_REDIRECT_FROM) REDIRECT_FROM="$value" ;;
 		esac
 	done < "$ENV_FILE"
+	case " $seen " in *" SLOWDNS_REDIRECT_FROM "*) ;; *)
+		[ "${UDP_ADDR##*:}" = 53 ] || REDIRECT_FROM=53 ;;
+	esac
 	case "$KEY_FILE" in /*) ;; *) KEY_FILE="$WORK_DIR/$KEY_FILE" ;; esac
 	[ -s "$KEY_FILE" ] || fail "The existing private key is missing or empty; no replacement was created"
 }

@@ -2,29 +2,74 @@
 
 [Bahasa Indonesia](#bahasa-indonesia) | [English](#english)
 
+## Instalasi Cepat (git clone)
+
+Jalankan di VPS sebagai root. Ganti `dns.domainmu.com` dengan domain SlowDNS
+Anda:
+
+```sh
+apt-get update && apt-get install -y git
+rm -rf /root/slowdns
+git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
+cd /root/slowdns
+bash install.sh
+```
+
+Pilih **1. Install**, lalu isi pengaturan. Untuk memakai SlowDNS di UDP `53000`
+sambil tetap menerima koneksi di UDP `53`, isi UDP port dengan `53000`.
+Installer otomatis menambahkan redirect UDP `53` -> `53000` dan menghapusnya saat
+layanan berhenti. Pastikan UDP `53` dan `53000` diizinkan pada firewall VPS dan
+panel penyedia server.
+
+Periksa layanan dan rule redirect:
+
+```sh
+systemctl status slowdns
+iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
+```
+
+Hapus layanan (file tetap disimpan):
+
+```sh
+bash /root/slowdns/install.sh uninstall
+```
+
+Hapus total termasuk folder:
+
+```sh
+bash /root/slowdns/install.sh uninstall
+rm -rf /root/slowdns
+```
+
 ## Bahasa Indonesia
 
 ### 1. Siapkan VPS dan Berkas
 
-Gunakan VPS Linux dengan systemd. Siapkan domain SlowDNS yang mengarah ke VPS
-dan izinkan UDP port `53` pada firewall VPS serta panel penyedia server.
-Untuk memakai IPv4 dan IPv6, izinkan port tersebut pada keduanya.
-Pastikan port tersebut belum digunakan layanan lain.
+Gunakan VPS Linux dengan systemd. Siapkan domain SlowDNS yang mengarah ke VPS.
+Izinkan UDP `53` dan port SlowDNS yang dipilih (misalnya `53000`) pada firewall
+VPS serta panel penyedia server. Untuk memakai IPv4 dan IPv6, izinkan pada
+keduanya.
 
-Masuk ke VPS sebagai root, lalu buat folder pemasangan:
+Masuk ke VPS sebagai root, lalu ambil berkas dari GitHub:
 
 ```sh
-mkdir -p /root/slowdns
+rm -rf /root/slowdns
+git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
+cd /root/slowdns
 ```
 
-Ekstrak berkas unduhan di komputer, lalu unggah `install.sh` dan `slowdns`
-ke folder tersebut:
+Isi folder pemasangan:
 
 ```text
 /root/slowdns/
   install.sh
   slowdns
+  server.key
+  server.pub
 ```
+
+Jika tidak memakai `git clone`, unggah `install.sh` dan `slowdns` (sesuai
+arsitektur VPS) ke folder tersebut.
 
 ### 2. Jalankan Installer
 
@@ -38,8 +83,8 @@ nilai yang ditampilkan dalam kurung siku.
 | Pengaturan | Isi dengan |
 | --- | --- |
 | Listener IP | Tekan Enter untuk `auto`: IPv4 dan IPv6 yang tersedia. Isi satu IP VPS jika ingin memakai alamat itu saja. |
-| UDP port | `53`. |
-| SlowDNS domain | Domain yang sudah Anda siapkan, misalnya `dns.example.org`. |
+| UDP port | `53000` (dengan redirect dari `53`), atau `53` untuk langsung. |
+| SlowDNS domain | Domain yang sudah Anda siapkan, misalnya `dns.domainmu.com`. |
 | SSH/upstream destination | `127.0.0.1:22` jika SSH berjalan pada port `22` di VPS yang sama. |
 
 Installer membuat konfigurasi dan pasangan key secara otomatis, lalu
@@ -47,9 +92,10 @@ menjalankan layanan `slowdns`. Konfigurasi tersimpan di `/root/slowdns/slowdns.e
 bersama key di folder yang sama. Menu dan pesan installer memakai bahasa Inggris.
 Biarkan `install.sh` di folder tersebut selama layanan digunakan.
 
-Dengan `auto`, listener menggunakan `:53`. Jika VPS hanya memiliki IPv4 atau
-IPv6, keluarga alamat yang tersedia tetap dapat digunakan. IPv6 tertentu boleh
-diisi sebagai `2001:db8::7` atau `[2001:db8::7]` pada prompt IP.
+Dengan `auto`, listener menggunakan semua IP global yang tersedia. Jika VPS
+hanya memiliki IPv4 atau IPv6, keluarga alamat yang tersedia tetap dapat
+digunakan. IPv6 tertentu boleh diisi sebagai `2001:db8::7` atau
+`[2001:db8::7]` pada prompt IP.
 Jika port sudah dipakai DNS sistem, installer berhenti tanpa mematikannya.
 Anda dapat memilih satu IP VPS yang portnya masih kosong.
 
@@ -65,13 +111,17 @@ bash /root/slowdns/install.sh --help
 `-help` dan `-h` juga tersedia. Gunakan `install` untuk langsung memasang
 tanpa membuka menu.
 
-UDP `53` langsung memakai NOTRACK pada IP VPS yang dipilih agar trafik SlowDNS tidak
-memenuhi tabel pelacakan koneksi. Aturannya dilepas saat layanan berhenti.
-IPv4 memakai `iptables`, sedangkan IPv6 memakai `ip6tables`.
-Jika memilih port selain `53` (misalnya `53000`), installer menambahkan pengalihan
-UDP `53` -> port tersebut (NAT, komentar `slowdns-redirect`) saat layanan start
-dan menghapusnya saat layanan stop. Installer tidak menambah aturan izin firewall.
-Jika memilih port lain, NOTRACK tidak dipasang.
+### Redirect UDP 53 -> port SlowDNS
+
+Jika UDP port yang dipilih bukan `53` (misalnya `53000`), installer menambahkan
+aturan NAT di `PREROUTING` yang mengalihkan UDP `53` ke port tersebut. Aturan
+diberi komentar `slowdns-redirect`, dipasang saat layanan start, dan dihapus saat
+layanan stop. IPv4 memakai `iptables`, sedangkan IPv6 memakai `ip6tables`.
+Installer tidak menambah aturan izin firewall; izinkan portnya secara manual.
+
+Jika memilih port `53` secara langsung, installer memakai NOTRACK (raw table)
+pada IP VPS yang dipilih agar trafik SlowDNS tidak memenuhi tabel pelacakan
+koneksi. Aturannya juga dilepas saat layanan berhenti.
 
 ### 3. Hubungkan HTTP Custom
 
@@ -83,16 +133,20 @@ cat /root/slowdns/server.pub
 
 Di pengaturan SlowDNS HTTP Custom, isi IP VPS, domain, dan public key tersebut,
 lalu coba hubungkan. `server.key` adalah private key dan tetap disimpan di server.
+Jika memakai redirect, gunakan port `53` pada aplikasi; jika tidak, gunakan port
+SlowDNS yang dipilih (misalnya `53000`).
 
 ### Memeriksa Layanan
 
 ```sh
 systemctl status slowdns
 journalctl -u slowdns -f
+iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
 ```
 
 Perintah pertama menampilkan status layanan. Perintah kedua menampilkan log
-terbaru; tekan Ctrl+C untuk selesai melihat log.
+terbaru; tekan Ctrl+C untuk selesai melihat log. Perintah ketiga menampilkan
+rule redirect yang aktif.
 
 ### Memasang Ulang
 
@@ -116,31 +170,80 @@ bash /root/slowdns/install.sh uninstall
 ```
 
 Layanan dihentikan dan dihapus. Berkas konfigurasi, key, installer, dan
-`slowdns` tetap tersimpan di folder pemasangan.
+`slowdns` tetap tersimpan di folder pemasangan. Hapus folder secara manual jika
+tidak diperlukan lagi:
+
+```sh
+rm -rf /root/slowdns
+```
 
 ## English
 
-### 1. Prepare the VPS and Files
+## Quick Install (git clone)
 
-Use a Linux VPS with systemd. Set up your SlowDNS domain to point to the VPS
-and allow UDP port `53` in the VPS firewall and your server provider's panel.
-To use both IPv4 and IPv6, allow that port for both.
-Make sure no other service is using the port.
-
-Log in to the VPS as root, then create the installation folder:
+Run on the VPS as root. Replace `dns.yourdomain.com` with your SlowDNS domain:
 
 ```sh
-mkdir -p /root/slowdns
+apt-get update && apt-get install -y git
+rm -rf /root/slowdns
+git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
+cd /root/slowdns
+bash install.sh
 ```
 
-Extract the download on your computer, then upload `install.sh` and `slowdns`
-to that folder:
+Choose **1. Install**, then enter the settings. To run SlowDNS on UDP `53000`
+while still accepting connections on UDP `53`, set the UDP port to `53000`.
+The installer adds a UDP `53` -> `53000` redirect and removes it when the
+service stops. Make sure UDP `53` and `53000` are allowed in the VPS firewall
+and your server provider's panel.
+
+Check the service and redirect rule:
+
+```sh
+systemctl status slowdns
+iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
+```
+
+Remove the service (files are kept):
+
+```sh
+bash /root/slowdns/install.sh uninstall
+```
+
+Remove everything including the folder:
+
+```sh
+bash /root/slowdns/install.sh uninstall
+rm -rf /root/slowdns
+```
+
+### 1. Prepare the VPS and Files
+
+Use a Linux VPS with systemd. Set up your SlowDNS domain to point to the VPS.
+Allow UDP `53` and the SlowDNS port you choose (for example `53000`) in the
+VPS firewall and your server provider's panel. To use both IPv4 and IPv6,
+allow them on both.
+
+Log in to the VPS as root, then fetch the files from GitHub:
+
+```sh
+rm -rf /root/slowdns
+git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
+cd /root/slowdns
+```
+
+Installation folder contents:
 
 ```text
 /root/slowdns/
   install.sh
   slowdns
+  server.key
+  server.pub
 ```
+
+If you do not use `git clone`, upload `install.sh` and the `slowdns` binary for
+your VPS architecture to that folder.
 
 ### 2. Run the Installer
 
@@ -154,8 +257,8 @@ value shown in square brackets.
 | Setting | Enter |
 | --- | --- |
 | Listener IP | Press Enter for `auto`: available IPv4 and IPv6. Enter one VPS IP to listen only on that address. |
-| UDP port | `53`. |
-| SlowDNS domain | The domain you set up, such as `dns.example.org`. |
+| UDP port | `53000` (with redirect from `53`), or `53` for direct. |
+| SlowDNS domain | The domain you set up, such as `dns.yourdomain.com`. |
 | SSH/upstream destination | `127.0.0.1:22` if SSH runs on port `22` on the same VPS. |
 
 The installer creates the configuration and key pair, then starts the
@@ -163,9 +266,9 @@ The installer creates the configuration and key pair, then starts the
 with the keys in the same folder. Installer menus and messages are in English.
 Keep `install.sh` in that folder while the service is in use.
 
-With `auto`, the listener uses `:53`. If the VPS only has IPv4 or IPv6,
-it can still use the available address family. You can enter a specific IPv6
-address as `2001:db8::7` or `[2001:db8::7]` at the IP prompt.
+With `auto`, the listener uses every available global IP. If the VPS only has
+IPv4 or IPv6, it can still use the available address family. You can enter a
+specific IPv6 address as `2001:db8::7` or `[2001:db8::7]` at the IP prompt.
 If system DNS is already using the port, the installer stops without stopping it.
 You can choose one VPS IP where the port is free instead.
 
@@ -181,13 +284,17 @@ bash /root/slowdns/install.sh --help
 `-help` and `-h` also work. Use `install` to install directly without
 opening the menu.
 
-Direct UDP `53` uses NOTRACK on the selected VPS IPs to keep SlowDNS traffic out
-of the connection tracking table. These rules are removed when the service
-stops. IPv4 uses `iptables`, and IPv6 uses `ip6tables`.
-If you choose a port other than `53` (for example `53000`), the installer adds
-a UDP `53` -> that port redirect (NAT, comment `slowdns-redirect`) when the
-service starts and removes it when it stops. The installer does not add firewall
-allow rules. Other ports do not use NOTRACK.
+### UDP 53 -> SlowDNS port redirect
+
+If the chosen UDP port is not `53` (for example `53000`), the installer adds a
+NAT `PREROUTING` rule that redirects UDP `53` to that port. The rule is tagged
+with the comment `slowdns-redirect`, added when the service starts, and removed
+when it stops. IPv4 uses `iptables`, and IPv6 uses `ip6tables`.
+The installer does not add firewall allow rules; allow the ports yourself.
+
+If you choose port `53` directly, the installer uses NOTRACK (raw table) on the
+selected VPS IPs so SlowDNS traffic stays out of the connection tracking table.
+Those rules are also removed when the service stops.
 
 ### 3. Connect HTTP Custom
 
@@ -199,17 +306,20 @@ cat /root/slowdns/server.pub
 
 In HTTP Custom's SlowDNS settings, enter the VPS IP address, domain, and
 public key, then try connecting. `server.key` is the private key and stays
-on the server.
+on the server. If you use the redirect, use port `53` in the app; otherwise use
+the SlowDNS port you chose (for example `53000`).
 
 ### Check the Service
 
 ```sh
 systemctl status slowdns
 journalctl -u slowdns -f
+iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
 ```
 
 The first command shows the service status. The second shows the latest logs;
-press Ctrl+C when you finish viewing them.
+press Ctrl+C when you finish viewing them. The third shows the active redirect
+rules.
 
 ### Reinstall
 
@@ -233,4 +343,9 @@ bash /root/slowdns/install.sh uninstall
 ```
 
 The service is stopped and removed. The configuration, keys, installer, and
-`slowdns` remain in the installation folder.
+`slowdns` remain in the installation folder. Remove the folder manually if it is
+no longer needed:
+
+```sh
+rm -rf /root/slowdns
+```
