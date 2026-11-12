@@ -15,10 +15,8 @@ EXTRA_ARGS=""
 DIRECT_IP=""
 INTERFACE=""
 DIRECT_BINDINGS=""
-LISTENER_BINDINGS=""
 REDIRECT_FROM=""
-AUTO=0
-AUTO_DOMAIN=""
+LISTENER_BINDINGS=""
 TEMP_DIR=""
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -27,19 +25,14 @@ help() {
 	cat <<EOF
 SlowDNS installer
 
-Usage: bash $SCRIPT_FILE [install|auto [domain]|uninstall]
-  No argument   Show the Install / Uninstall / Auto menu.
+Usage: bash $SCRIPT_FILE [install|uninstall]
+  No argument   Show the Install / Uninstall menu.
   install       Install or restart using the saved configuration and keys.
-  auto [domain] Non-interactive install on UDP 53000 with default keys and a
-                redirect from UDP 53 to 53000. Domain may also come from
-                SLOWDNS_DOMAIN (placeholder is used when omitted).
-  uninstall     Stop and remove the service, its rules, and this folder.
-                Set SLOWDNS_KEEP_FILES=1 to keep the files.
+  uninstall     Remove the service; keep the configuration, keys, and binary.
   -h, -help, --help
                 Show this help without making changes.
 
 Examples:
-  sudo SLOWDNS_DOMAIN=dns.example.org bash $SCRIPT_FILE auto
   sudo bash $SCRIPT_FILE install
   sudo bash $SCRIPT_FILE uninstall
 
@@ -47,13 +40,12 @@ Place the slowdns binary beside this installer. Linux with systemd is required.
 Settings: $ENV_FILE
 Keys:     $WORK_DIR/server.key and $WORK_DIR/server.pub
 
-The first install asks for the listener IP, UDP port (53000), domain, and
-upstream. Use auto (default) for available IPv4 and IPv6, or enter one VPS IP.
-When the UDP port is not 53, a PREROUTING redirect sends incoming UDP 53 to that
-port so the service never binds UDP 53 and can coexist with the system DNS.
-The redirect is inserted with an iptables/ip6tables comment (slowdns-redirect)
-and is removed when the service stops. No firewall allow rules are added.
-Allow UDP 53 in your firewall and set up the DNS delegation.
+The first install asks for the listener IP, UDP port (53), domain, and upstream.
+Use auto (default) for available IPv4 and IPv6, or enter one VPS IP address.
+Direct UDP 53 uses scoped iptables/ip6tables NOTRACK rules for those addresses.
+The rules are removed when the service stops. Other services are not stopped.
+Other ports do not use NOTRACK. No NAT or firewall allow rules are added.
+Allow the chosen UDP port in your firewall and set up the DNS delegation.
 Keep this installer in place while the service is installed.
 EOF
 }
@@ -116,8 +108,9 @@ read_config() {
 			SLOWDNS_DOMAIN) DOMAIN="$value" ;; SLOWDNS_UPSTREAM_ADDR) UPSTREAM="$value" ;;
 			SLOWDNS_PRIVKEY_FILE) KEY_FILE="$value" ;; SLOWDNS_EXTRA_ARGS) EXTRA_ARGS="$value" ;;
 			SLOWDNS_DIRECT_IPV4) DIRECT_IP="$value" ;; SLOWDNS_DIRECT_INTERFACE) INTERFACE="$value" ;;
-			SLOWDNS_DIRECT_BINDINGS) DIRECT_BINDINGS="$value" ;;
-			SLOWDNS_REDIRECT_FROM) REDIRECT_FROM="$value" ;;
+			SLOWDNS_DIRECT_BINDINGS) DIRECT_BINDINGS="" ;;
+
+		SLOWDNS_REDIRECT_FROM) REDIRECT_FROM="$value" ;;
 		esac
 	done < "$ENV_FILE"
 	case "$KEY_FILE" in /*) ;; *) KEY_FILE="$WORK_DIR/$KEY_FILE" ;; esac
@@ -127,20 +120,12 @@ read_config() {
 new_config() {
 	local address port
 	ask 'Listener IP (auto = available IPv4 and IPv6)' auto address
-	ask 'UDP port' 53000 port
+	ask 'UDP port' 53 port
 	ask 'SlowDNS domain' '' DOMAIN
 	ask 'SSH/upstream destination' "$UPSTREAM" UPSTREAM
 	case "$address" in auto) address="" ;; \[*\]) ;; *:*) address="[$address]" ;; esac
 	UDP_ADDR="$address:$port"
 	[ "$((10#$port))" = 53 ] || REDIRECT_FROM=53
-}
-
-auto_config() {
-	local port="${SLOWDNS_PORT:-53000}"
-	UDP_ADDR=":$port"
-	DOMAIN="${AUTO_DOMAIN:-${SLOWDNS_DOMAIN:-dns.example.org}}"
-	UPSTREAM="${SLOWDNS_UPSTREAM:-127.0.0.1:22}"
-	[ "$((10#$port))" = 53 ] || REDIRECT_FROM="${SLOWDNS_REDIRECT_FROM:-53}"
 }
 
 address_bindings() {
@@ -229,11 +214,8 @@ check_config() {
 		fail "The public key exists without its private key; the key pair was not replaced"
 	fi
 	if [ -n "$REDIRECT_FROM" ] && [ "${UDP_ADDR##*:}" != "$REDIRECT_FROM" ]; then
-		[[ "$REDIRECT_FROM" =~ ^[0-9]{1,5}$ ]] &&
-			(( 10#$REDIRECT_FROM >= 1 && 10#$REDIRECT_FROM <= 65535 )) ||
-			fail "Invalid redirect source port"
-		command -v iptables >/dev/null 2>&1 || command -v ip6tables >/dev/null 2>&1 ||
-			fail "Redirect requires iptables or ip6tables"
+		[[ "$REDIRECT_FROM" =~ ^[0-9]{1,5}$ ]] && (( 10#$REDIRECT_FROM >= 1 && 10#$REDIRECT_FROM <= 65535 )) || fail "Invalid redirect source port"
+		command -v iptables >/dev/null 2>&1 || command -v ip6tables >/dev/null 2>&1 || fail "Redirect requires iptables or ip6tables"
 	fi
 }
 
@@ -292,7 +274,7 @@ check_runtime() {
 
 listeners() {
 	local sockets
-	sockets="$(ss -H -lunpe "sport = :${UDP_ADDR##*:}")" || return 1
+	sockets="$(ss -H -O -lunpe "sport = :${UDP_ADDR##*:}")" || return 1
 	printf '%s\n' "$sockets" | awk -v host="${UDP_ADDR%:*}" '
 		$1=="UNCONN" {address=$4; sub(/:[^:]*$/, "", address)
 		if(host=="" || host=="0.0.0.0" || host=="[::]" || address==host ||
@@ -373,7 +355,7 @@ network_hook() {
 redirect_hook() {
 	[ "$#" -eq 3 ] || fail "Invalid redirect hook arguments"
 	local action="$1" listener="$2" from="$3" to tool
-	case "$action" in start|stop) ;; *) fail "Invalid redirect action" ;; esac
+	case "$action" in start|stop) ;; *) fail "Invalid hook action" ;; esac
 	[ -n "$from" ] || return 0
 	[[ "$from" =~ ^[0-9]{1,5}$ ]] || fail "Invalid redirect source port"
 	to="${listener##*:}"
@@ -382,21 +364,16 @@ redirect_hook() {
 	for tool in iptables ip6tables; do
 		command -v "$tool" >/dev/null 2>&1 || continue
 		if [ "$action" = start ]; then
-			if ! "$tool" -w 5 -t nat -C PREROUTING -p udp --dport "$from" \
-				-m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to" 2>/dev/null; then
-				"$tool" -w 5 -t nat -I PREROUTING 1 -p udp --dport "$from" \
-					-m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to"
+			if ! "$tool" -w 5 -t nat -C PREROUTING -p udp --dport "$from" -m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to" 2>/dev/null; then
+				"$tool" -w 5 -t nat -I PREROUTING 1 -p udp --dport "$from" -m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to"
 			fi
 		else
-			while "$tool" -w 5 -t nat -C PREROUTING -p udp --dport "$from" \
-				-m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to" 2>/dev/null; do
-				"$tool" -w 5 -t nat -D PREROUTING -p udp --dport "$from" \
-					-m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to"
+			while "$tool" -w 5 -t nat -C PREROUTING -p udp --dport "$from" -m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to" 2>/dev/null; do
+				"$tool" -w 5 -t nat -D PREROUTING -p udp --dport "$from" -m comment --comment slowdns-redirect -j REDIRECT --to-ports "$to"
 			done
 		fi
 	done
 }
-
 write_files() {
 	if [ ! -f "$KEY_FILE" ]; then
 		"$WORK_DIR/$BINARY" -gen-key -privkey-file "$TEMP_DIR/server.key" -pubkey-file "$TEMP_DIR/server.pub"
@@ -445,9 +422,9 @@ verify_listener() {
 	local attempt pid sockets binding ready bindings=()
 	read -r -a bindings <<< "$LISTENER_BINDINGS"
 	for attempt in 1 2 3 4 5; do
-		systemctl is-active --quiet "$SERVICE" || { printf 'The service is not active; check journalctl -u %s\n' "$SERVICE" >&2; return 1; }
+		systemctl is-active --quiet "$SERVICE" || fail "The service is not active; check journalctl -u $SERVICE"
 		pid="$(systemctl show "$SERVICE" --property=MainPID --value)"
-		sockets="$(listeners)" || { printf 'Could not check the listener\n' >&2; return 1; }
+		sockets="$(listeners)" || fail "Could not check the listener"
 		if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
 			sockets="$(printf '%s\n' "$sockets" | grep -E "pid=$pid([,)])" || true)"
 			ready=true
@@ -458,8 +435,7 @@ verify_listener() {
 		fi
 		sleep 1
 	done
-	printf 'The service has no UDP listener verified for every selected IP family at %s\n' "$UDP_ADDR" >&2
-	return 1
+	fail "The service has no UDP listener verified for every selected IP family at $UDP_ADDR"
 }
 
 family_listener() {
@@ -475,69 +451,24 @@ family_listener() {
 }
 
 install_service() {
-	if [ "$AUTO" = 1 ]; then
-		chown -R root:root "$WORK_DIR" 2>/dev/null || true
-		chmod go-w "$WORK_DIR" 2>/dev/null || true
-	fi
 	check_owned_files "$WORK_DIR" "$SCRIPT_FILE" "$ENV_FILE"
 	check_unit
-	if [ -f "$ENV_FILE" ]; then read_config
-	elif [ "$AUTO" = 1 ]; then auto_config
-	else new_config
-	fi
+	if [ -f "$ENV_FILE" ]; then read_config; else new_config; fi
 	resolve_binary
 	check_owned_files "$WORK_DIR/$BINARY" "$KEY_FILE" "$WORK_DIR/server.pub"
 	check_config
 	prepare_listener
 	check_runtime
 	check_port
-
-	sysctl -w net.ipv6.bindv6only=0 >/dev/null 2>&1 || true
-
-	local port="${UDP_ADDR##*:}"
-	local -a candidates=()
-	candidates+=(":$port")
-	if ip -4 address show scope global 2>/dev/null | grep -q inet; then
-		local v4
-		v4="$(ip -4 address show scope global 2>/dev/null | awk '/inet /{split($2,a,"/"); print a[1]; exit}')"
-		[ -n "$v4" ] && candidates+=("$v4:$port")
-	fi
-	if ip -6 address show scope global 2>/dev/null | grep -q inet6; then
-		local v6
-		v6="$(ip -6 address show scope global 2>/dev/null | awk '/inet6 /{split($2,a,"/"); print a[1]; exit}')"
-		[ -n "$v6" ] && candidates+=("[$v6]:$port")
-	fi
-
-	local bind attempt_ok=0
-	for bind in "${candidates[@]}"; do
-		UDP_ADDR="$bind"
-		rm -f "$ENV_FILE" "$SYSTEMD_DIR/$SERVICE"
-		TEMP_DIR="$(mktemp -d "$WORK_DIR/.slowdns-install.XXXXXX")"
-		trap 'rm -rf -- "$TEMP_DIR"' EXIT
-		trap 'exit 1' HUP INT TERM
-		chmod 0755 "$WORK_DIR/$BINARY"
-		prepare_listener
-		write_files
-		rm -rf "$TEMP_DIR"; TEMP_DIR=""
-		systemctl daemon-reload
-		systemctl enable "$SERVICE" >/dev/null 2>&1 || true
-		systemctl restart "$SERVICE"
-		if verify_listener; then
-			attempt_ok=1
-			break
-		fi
-		systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-	done
-
-	[ "$attempt_ok" = 1 ] || fail "The service has no UDP listener verified for any bind address at port $port"
-
+	TEMP_DIR="$(mktemp -d "$WORK_DIR/.slowdns-install.XXXXXX")"
+	trap 'rm -rf -- "$TEMP_DIR"' EXIT
+	trap 'exit 1' HUP INT TERM
+	chmod 0755 "$WORK_DIR/$BINARY"
+	write_files
+	systemctl enable "$SERVICE"
+	systemctl restart "$SERVICE"
+	verify_listener
 	printf 'SlowDNS is running: %s\nConfiguration: %s\nPublic key: %s/server.pub\n' "$UDP_ADDR" "$ENV_FILE" "$WORK_DIR"
-	if [ -n "$REDIRECT_FROM" ] && [ "${UDP_ADDR##*:}" != "$REDIRECT_FROM" ]; then
-		printf 'Redirect active: UDP %s -> %s (comment slowdns-redirect)\n' "$REDIRECT_FROM" "${UDP_ADDR##*:}"
-	fi
-	if [ "$DOMAIN" = "dns.example.org" ]; then
-		printf 'WARNING: domain is still a placeholder. Edit %s and run: bash %s install\n' "$ENV_FILE" "$SCRIPT_FILE"
-	fi
 	printf '%s\n' 'Check your firewall and DNS delegation, then try connecting from HTTP Custom.'
 }
 
@@ -564,40 +495,21 @@ uninstall_service() {
 	if [ -n "$UDP_ADDR" ] && [ -n "$REDIRECT_FROM" ]; then
 		redirect_hook stop "$UDP_ADDR" "$REDIRECT_FROM" || true
 	fi
-	printf 'Service and redirect rules removed.\n'
-	if [ "${SLOWDNS_KEEP_FILES:-0}" = 1 ]; then
-		printf 'Files kept in %s\n' "$WORK_DIR"
-		return 0
-	fi
-	printf 'Removing installation folder %s\n' "$WORK_DIR"
-	if command -v setsid >/dev/null 2>&1; then
-		setsid bash -c 'sleep 1; rm -rf -- "$1"' _ "$WORK_DIR" >/dev/null 2>&1 &
-	else
-		( sleep 1; rm -rf -- "$WORK_DIR" ) >/dev/null 2>&1 &
-	fi
-	printf 'Installation folder will be deleted.\n'
+	printf 'Service removed. The binary, configuration, and keys remain in %s\n' "$WORK_DIR"
 }
 
 main() {
 	local action="${1:-}"
 	if [ "$action" = __network ]; then shift; network_hook "$@"; return; fi
 	if [ "$action" = __redirect ]; then shift; redirect_hook "$@"; return; fi
+	[ "$#" -le 1 ] || fail "Use install or uninstall; see --help for examples"
 	case "$action" in -h|-help|--help) help; return ;; esac
 	check_host
 	if [ -z "$action" ]; then
-		printf '1. Install\n2. Uninstall\n3. Auto install (UDP 53000 + redirect 53)\n'
+		printf '1. Install\n2. Uninstall\n'
 		ask Choice 1 action
 	fi
-	case "$action" in
-		1|install) install_service ;;
-		2|uninstall) uninstall_service ;;
-		3|auto)
-			[ "$#" -le 2 ] || fail "Usage: bash $SCRIPT_FILE auto [domain]"
-			AUTO=1
-			[ "$#" -lt 2 ] || AUTO_DOMAIN="$2"
-			install_service ;;
-		*) fail "Choose Install, Uninstall, or Auto" ;;
-	esac
+	case "$action" in 1|install) install_service ;; 2|uninstall) uninstall_service ;; *) fail "Choose Install or Uninstall" ;; esac
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

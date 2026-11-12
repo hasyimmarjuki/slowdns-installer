@@ -2,36 +2,6 @@
 
 [Bahasa Indonesia](#bahasa-indonesia) | [English](#english)
 
-## Instalasi Cepat (git clone)
-
-Salin dan jalankan di VPS sebagai root. Ganti `dns.domainmu.com` dengan domain
-SlowDNS Anda:
-
-```sh
-apt-get update && apt-get install -y git
-rm -rf /root/slowdns
-git clone https://github.com/hasyimmarjuki/slowdns-installer.git /root/slowdns
-cd /root/slowdns
-SLOWDNS_DOMAIN=dns.domainmu.com bash install.sh auto
-```
-
-Mode `auto` memasang SlowDNS di UDP `53000` memakai key default, lalu
-menambahkan redirect UDP `53` -> `53000`. Service tidak memakai port `53`
-sehingga aman walau DNS bawaan VPS sudah menempati port itu.
-
-Periksa layanan dan rule redirect:
-
-```sh
-systemctl status slowdns
-iptables -t nat -L PREROUTING -n -v | grep slowdns-redirect
-```
-
-Hapus total (service, rule, dan folder `/root/slowdns`):
-
-```sh
-bash /root/slowdns/install.sh uninstall
-```
-
 ## Bahasa Indonesia
 
 ### 1. Siapkan VPS dan Berkas
@@ -98,7 +68,9 @@ tanpa membuka menu.
 UDP `53` langsung memakai NOTRACK pada IP VPS yang dipilih agar trafik SlowDNS tidak
 memenuhi tabel pelacakan koneksi. Aturannya dilepas saat layanan berhenti.
 IPv4 memakai `iptables`, sedangkan IPv6 memakai `ip6tables`.
-Installer tidak mengubah aturan izin firewall atau pengalihan port (NAT).
+Jika memilih port selain `53` (misalnya `53000`), installer menambahkan pengalihan
+UDP `53` -> port tersebut (NAT, komentar `slowdns-redirect`) saat layanan start
+dan menghapusnya saat layanan stop. Installer tidak menambah aturan izin firewall.
 Jika memilih port lain, NOTRACK tidak dipasang.
 
 ### 3. Hubungkan HTTP Custom
@@ -212,8 +184,10 @@ opening the menu.
 Direct UDP `53` uses NOTRACK on the selected VPS IPs to keep SlowDNS traffic out
 of the connection tracking table. These rules are removed when the service
 stops. IPv4 uses `iptables`, and IPv6 uses `ip6tables`.
-The installer does not change firewall allow rules or port forwarding
-(NAT). Other ports do not use NOTRACK.
+If you choose a port other than `53` (for example `53000`), the installer adds
+a UDP `53` -> that port redirect (NAT, comment `slowdns-redirect`) when the
+service starts and removes it when it stops. The installer does not add firewall
+allow rules. Other ports do not use NOTRACK.
 
 ### 3. Connect HTTP Custom
 
